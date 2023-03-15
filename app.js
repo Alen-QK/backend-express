@@ -7,6 +7,7 @@ const mongoose = require('mongoose');
 
 const User = require('./models/User');
 const History = require('./models/ChatHistory');
+const {response} = require("express");
 
 dotenv.config();
 const app = express();
@@ -44,18 +45,20 @@ app.post('/api.text', (req, res) => {
 });
 
 app.post('/api.chatgpt', (req, res) => {
-    const text = req.body.text;
+    let userid = req.body.id;
     // 还是应该让前端传回实时的当前聊天记录，否则每次都只传回一个userid来做检查对于数据库的访问过于频繁
-    const chatHistory = req.body.history;
+    let chatHistory = req.body.data;
+
+    chatHistory = chatHistory.map((item) => {
+        return {
+            role: item.role,
+            content: item.content
+        }
+    });
 
     let data = {
         model: "gpt-3.5-turbo",
-        messages: [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Who won the world series in 2020?"},
-            {"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."},
-            {"role": "user", "content": "Where was it played?"}
-        ]
+        messages: chatHistory
     };
 
     let config = {
@@ -70,10 +73,21 @@ app.post('/api.chatgpt', (req, res) => {
                 res.send('API connection error')
             } else {
                 // 向数据库存储最新的聊天记录 todo
-                res.send(response.data.choices[0].message)
+                chatHistory.push(response.data.choices[0].message);
+                UpdateHistory(userid, chatHistory).then(r => {
+                    res.send({code: 200, data: response.data.choices[0].message})
+                });
             }
         });
 });
+
+async function UpdateHistory(userid, history) {
+    await mongoose.connect(process.env.MONGO_URL);
+    const user = await History.findOne({id: userid});
+
+    user.history = history;
+    await user.save();
+}
 
 app.post('/api.db', (req, res) => {
     Create_DB(res);
@@ -85,7 +99,12 @@ async function Create_DB(res) {
 
     if (!test[0]) {
         await User.create({id: 'test', name: 'admin', pwd: '123456'});
-        await History.create({id: 'test', history: []});
+        await History.create({id: 'YXdzZGY=', history: [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "Who won the world series in 2020?"},
+                {"role": "assistant", "content": "The Los Angeles Dodgers won the World Series in 2020."},
+                {"role": "user", "content": "Where was it played?"}
+            ]});
 
         res.send({code: 210, data: 'DB init finish'});
     } else {
@@ -119,6 +138,7 @@ app.post('/api.signup', (req, res) => {
             async function Add_User(data) {
                 await mongoose.connect(process.env.MONGO_URL);
                 await User.create({id: data.id, name: data.name, pwd: data.pwd});
+                await History.create({id: data.id, history: []});
             }
 
             Add_User(SignupData).then(() => {
@@ -131,6 +151,20 @@ app.post('/api.signup', (req, res) => {
 async function Check_User(data) {
     await mongoose.connect(process.env.MONGO_URL);
     return await User.find({id: data.id}).exec()
+}
+
+app.post('/api.gethis', (req, res) => {
+    const userid = req.body.id;
+
+    Select_His(userid).then((response) => {
+
+        res.send({code: 200, data: response[0].history})
+    })
+})
+
+async function Select_His(id) {
+    await mongoose.connect(process.env.MONGO_URL);
+    return await History.find({id: id}).exec()
 }
 
 app.listen(port, () => {
